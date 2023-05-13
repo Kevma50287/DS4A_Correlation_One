@@ -8,4 +8,9 @@ Given the recent economic challenges caused by the COVID-19 pandemic and macro e
 
 ## Project Dependencies
 
-This project requires you have Python, Jupyer Notebooks, Pandas, and PostgreSQL installed.
+This project requires you to have Python, Jupyer Notebooks, Pandas, BeautifulSoup, Selenium, Webdriver Manager, and PostgreSQL installed.
+
+Please run the following installation commands:
+
+```python
+pip install bs4 pandas selenium webdriver-manager postgres
