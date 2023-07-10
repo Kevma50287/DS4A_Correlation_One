@@ -1,4 +1,4 @@
-,Ticker Symbol,Date,Market Cap (intraday),Enterprise Value,Trailing P/E,Forward P/E,PEG Ratio (5 yr expected),Price/Sales,Price/Book,Enterprise Value/Revenue,Enterprise Value/EBITDA
+,Ticker Symbol,Date,Market Cap Intraday,Enterprise Value,Trailing PE,Forward PE,PEG Ratio 5 Yr Expected,Price Over Sales,Price Over Book,Enterprise Value Over Revenue,Enterprise Value Over EBITDA
 0,EWBC,2022-03-31,11240000000,,12.95,11.21,,6.28,1.93,,
 1,EWBC,2021-12-31,11170000000,,13.73,12.32,,6.46,1.96,,
 2,EWBC,2021-09-30,11000000000,,14.69,12.77,,6.7,1.98,,
