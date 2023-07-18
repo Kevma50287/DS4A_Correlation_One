@@ -14,3 +14,6 @@ Please run the following installation commands:
 
 ```python
 pip install bs4 pandas selenium webdriver-manager postgres
+pip install apache-airflow
+pip install apache-airflow-providers-cncf-kubernetes
+pip install virtualenv

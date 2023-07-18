@@ -1,0 +1,411 @@
+
+import json
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service as ChromeService
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
+from bs4 import BeautifulSoup
+import pandas as pd
+import time
+import os
+from datetime import datetime, timedelta
+import numpy as np
+import pendulum
+import boto3
+
+# Login to account. Yahoo Finance only gives the last 4 reporting periods, need Yahoo Finance Plus for complete hitorical FS data
+def login(username:str, password:str):
+    driver.get(stock_URL)
+
+    # Login to my account
+    sign_in_button=driver.find_element(By.ID, 'header-signin-link')
+    sign_in_button.click()
+    wait = WebDriverWait(driver, 10)  
+    element = wait.until(EC.presence_of_element_located((By.ID, 'login-username')))
+    login_username=driver.find_element(By.ID, 'login-username')
+
+    # Enter username
+    login_username.send_keys(username)
+    wait = WebDriverWait(driver, 10)  
+    element = wait.until(EC.presence_of_element_located((By.ID, 'login-signin')))
+    login_sign_in_button=driver.find_element(By.ID, 'login-signin')
+    login_sign_in_button.click()
+
+    # Maximum wait time of 10 seconds, wait for element to load
+    wait = WebDriverWait(driver, 10)  
+    element = wait.until(EC.presence_of_element_located((By.ID, 'login-passwd')))
+    login_passwd = driver.find_element(By.ID, 'login-passwd')
+
+    # Enter password
+    login_passwd.send_keys(password)
+    login_sign_in_button=driver.find_element(By.ID, 'login-signin')
+    login_sign_in_button.click()
+
+def get_URL_to(ticker: str, financial_statement_name: str):
+    stock_ticker = ticker
+    path = path_to[financial_statement_name]
+    URL = (
+        "https://finance.yahoo.com/quote/" + stock_ticker + path + stock_ticker
+    )
+    return URL
+
+#Only go to URL if it is different than the current URL
+def go_to_URL(URL):
+    current_url = driver.current_url
+    driver.get(URL)
+
+def expand_all_get_html():
+    time.sleep(2)
+    # Wait for expand button to load before clicking
+    wait = WebDriverWait(driver, 10)  
+    element = wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'expandPf')))
+    expand_button = driver.find_element(By.CLASS_NAME, 'expandPf')
+    expand_button.click()
+
+    # Let page load new html before extracting
+    time.sleep(2)
+
+    # Download HTML file
+    html_source = driver.page_source
+
+    return html_source
+
+def create_directory_if_not_exists(ticker):
+    directory = f'./CSV/{ticker}'
+    # Create the directory if it doesn't exist
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+def scrape_and_save_to_csv(html, ticker:str, financial_statement_name:str, period:str):
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Find all table headers (Dates)
+    table_headers = soup.find("div", {"class": "D(tbhg)"})
+    table_headers_row = table_headers.find_all("div", {"class": "D(ib)"})
+    table_headers_names = []
+
+    for div in table_headers_row:
+        span = div.span
+        name = span.get_text()
+        table_headers_names.append(name)
+
+    table_column_length = len(table_headers_names)
+
+    # Find all table rows (Amounts)
+    table_rows = soup.find("div", {"class": "D(tbrg)"})
+    table_rows_data = table_rows.find_all("div", {"class": "D(tbr)"})
+    table_rows_data_arrays = []
+
+    for table_row in table_rows_data:
+        row_header_text = table_row.find("div", {'class':"Ta(start)"}).find("span").get_text()
+        row_data_array = table_row.find_all("div", {'class':"Ta(c)"})
+        row_data_text_array = [row_header_text]
+
+        for div in row_data_array:
+            span = div.find("span") if div.find("span") != None else div
+            text = span.get_text()
+            row_data_text_array.append(text)
+        table_rows_data_arrays.append(row_data_text_array)
+
+
+    data_frame_object = {table_headers_names[0]:table_headers_names[1:]}
+
+    # First element in row array contains the row header
+    # Map it to an object and then convert into a dataframe
+    for data in table_rows_data_arrays:
+        data_frame_object[data[0]] = data[1:]
+
+    df = pd.DataFrame(data_frame_object)
+    # Save CSV
+    df.to_csv(f'./CSV/{ticker}/{financial_statement_name}_{period}.csv')
+
+def save_one_financial_statement(ticker:str, financial_statement_name:str, period:str):
+    create_directory_if_not_exists(ticker)
+    if period == 'quarterly':
+        URL = get_URL_to(ticker, financial_statement_name)
+        go_to_URL(URL)
+        wait = WebDriverWait(driver, 10)  
+        element = wait.until(EC.presence_of_element_located((By.XPATH, '//button[div[span[text()="Quarterly"]]]')))
+        quarterly_button = driver.find_element(By.XPATH, '//button[div[span[text()="Quarterly"]]]')
+        quarterly_button.click()
+        html_source = expand_all_get_html()
+        scrape_and_save_to_csv(html_source, ticker, financial_statement_name, period)
+    else:
+        URL = get_URL_to(ticker, financial_statement_name)
+        go_to_URL(URL)
+        html_source = expand_all_get_html()
+        scrape_and_save_to_csv(html_source, ticker, financial_statement_name, period)
+
+def save_all_financial_statements(ticker:str):
+    save_one_financial_statement(ticker, 'income_statement', 'annual')
+    save_one_financial_statement(ticker, 'income_statement', 'quarterly')
+    save_one_financial_statement(ticker, 'balance_sheet', 'annual')
+    save_one_financial_statement(ticker, 'balance_sheet', 'quarterly')
+    save_one_financial_statement(ticker, 'cashflow_statement', 'annual')
+    save_one_financial_statement(ticker, 'cashflow_statement', 'quarterly')
+
+def save_market_cap(ticker:str, period:str):
+    URL = get_URL_to(ticker, 'key-statistics')
+    go_to_URL(URL)
+    wait = WebDriverWait(driver, 10)  
+    element = wait.until(EC.presence_of_element_located((By.XPATH, f'//button[div[span[text()="{period}"]]]')))
+    button = driver.find_element(By.XPATH, f'//button[div[span[text()="{period}"]]]')
+    button.click()
+    html_source = driver.page_source
+    soup = BeautifulSoup(html_source, "html.parser")
+
+    # Find all table headers (Dates)
+    table_headers = soup.find("thead")
+    table_headers_row = table_headers.find_all("th")
+    table_headers_names = []
+    for th in table_headers_row:
+        print(th)
+        span = th.find('span')
+        if span:
+            text = span.get_text()
+        else:
+            text = ""
+        table_headers_names.append(text)
+
+    table_column_length = len(table_headers_names)
+
+    # Find all table rows (Amounts)
+    table_rows = soup.find("tbody")
+    table_rows_data = table_rows.find_all("tr")
+    table_rows_data_arrays = []
+    for tr in table_rows_data:
+        row_data_array = []
+        for i, td in enumerate(tr):
+            if i == 0:
+                row_data_array.append(td.span.get_text())
+            else:
+                row_data_array.append(td.get_text())
+        table_rows_data_arrays.append(row_data_array)
+    
+    data_frame_object = {table_headers_names[0]:table_headers_names[1:]}
+
+    # First element in row array contains the row header
+    # Map it to an object and then convert into a dataframe
+    for data in table_rows_data_arrays:
+        data_frame_object[data[0]] = data[1:]
+
+    df = pd.DataFrame(data_frame_object)
+    # Save CSV
+    df.to_csv(f'./CSV/{ticker}/market_stats.csv')
+
+
+from airflow.decorators import dag, task
+@dag(
+    schedule=None,
+    start_date=pendulum.datetime(2023, 9, 30, tz="UTC"),
+    catchup=False,
+    tags=["workflow"],
+)
+def etl_taskflow_api():
+    """
+    ### TaskFlow API Tutorial Documentation
+    This is a simple data pipeline example which demonstrates the use of
+    the TaskFlow API using three simple tasks for Extract, Transform, and Load.
+    Documentation that goes along with the Airflow TaskFlow API tutorial is
+    located
+    [here](https://airflow.apache.org/docs/apache-airflow/stable/tutorial_taskflow_api.html)
+    """
+    @task()
+    def extract():
+        """
+        #### Extract task
+        """
+        # TODO: Remove this return
+        # return True
+        stock_tickers_arr = [
+        # Add Stock Symbols here
+        ]
+
+        # Install and set ChromeDriver
+        driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()))
+
+        # Login here
+        login("kevinator112233@yahoo.com", "")
+
+        for stock_ticker in stock_tickers_arr:
+            save_all_financial_statements(stock_ticker)
+            save_market_cap(stock_ticker)
+
+        driver.quit()
+    @task(multiple_outputs=True)
+    def compile():
+        """
+        #### Compile task
+        A simple Transform task which takes in the collection of order data and
+        computes the total order value.
+        """
+
+        #compilation of all appropriate csv files
+        main_path = os.getcwd() + "/CSV"
+
+        # Initializing dicts
+        balance_sheet_df_collection = {}
+        cashflow_statement_df_collection = {}
+        income_statement_df_collection = {}
+        market_stats_df_collection = {}
+
+        collections = {
+            "balance_sheet_quarterly.csv": balance_sheet_df_collection,
+            "cashflow_statement_quarterly.csv": cashflow_statement_df_collection,
+            "income_statement_quarterly.csv": income_statement_df_collection,
+            "market_stats.csv": market_stats_df_collection
+        }
+
+        def process_csv_file(current_path, folder):
+            copy_df = pd.read_csv(current_path)
+            copy_df["Unnamed: 0"] = (copy_df["Unnamed: 0"] >= 0).astype(int).replace(1, folder)
+            column_names = copy_df.columns
+            return pd.DataFrame(copy_df, columns=column_names)
+
+        for folder in os.listdir(main_path):
+            for csv_file in os.listdir(os.path.join(main_path, folder)):
+                current_path = os.path.join(main_path, folder, csv_file)
+                if csv_file in collections:
+                    collections[csv_file][folder] = process_csv_file(current_path, folder)
+
+        balance_sheet_df = pd.concat(balance_sheet_df_collection)
+        cashflow_statement_df = pd.concat(cashflow_statement_df_collection)
+        income_statement_df = pd.concat(income_statement_df_collection)
+        market_stats_df = pd.concat(market_stats_df_collection)
+        return {
+            balance_sheet_df:balance_sheet_df,
+            cashflow_statement_df:cashflow_statement_df,
+            income_statement_df:income_statement_df,
+            market_stats_df:market_stats_df
+        }
+    @task()
+    def transform(dataframes:object):
+
+        # BALANCE SHEET
+
+        balance_sheet_df.rename(columns = {"Unnamed: 0":"Ticker", "Breakdown":"Date"}, inplace = True)
+        balance_sheet_df["Date"] = pd.to_datetime(balance_sheet_df["Date"])
+        balance_sheet_df.index.set_names(['Ticker Symbol', 'Index'], inplace = True) # Set index names 
+
+        # Clean column types
+        cols=[i for i in balance_sheet_df.columns if i not in ["Ticker","Date"]]
+        for col in cols:
+            balance_sheet_df[col] = balance_sheet_df[col].astype(str).str.replace(',','')
+            balance_sheet_df[col].replace('-', np.nan, inplace = True) #double check no negative values, find way to replace "-" for null values NaN without replacing negative values
+            balance_sheet_df[col]= balance_sheet_df[col].astype(float)
+
+        # CASH FLOWS
+        cashflow_statement_df.rename(columns = {"Unnamed: 0":"Ticker", "Breakdown":"Date"}, inplace = True)
+        cashflow_statement_df.index.set_names(['Ticker Symbol', 'Index'], inplace = True) # Set index names 
+        cashflow_statement_df.drop(0, level=1, axis=0, inplace=True) # Erase all ttm values as not necessary (trailing twelve months data not necessary)
+        cashflow_statement_df["Date"] = pd.to_datetime(cashflow_statement_df["Date"]) # Updating column type to datetime
+        
+        # Clean column types
+        cols=[i for i in cashflow_statement_df.columns if i not in ["Ticker","Date"]]
+        for col in cols:
+            cashflow_statement_df[col] = cashflow_statement_df[col].astype(str).str.replace(',','')
+            cashflow_statement_df[col].replace('-', np.nan, inplace = True) #double check no negative values, find way to replace "-" for null values NaN without replacing negative values but it works?
+            cashflow_statement_df[col]= cashflow_statement_df[col].astype(float)
+
+        # INCOME STATEMENT
+        income_statement_df.rename(columns = {"Unnamed: 0":"Ticker", "Breakdown":"Date"}, inplace = True)
+        income_statement_df.index.set_names(['Ticker Symbol', 'Index'], inplace = True) # Set index names 
+        income_statement_df.drop(0, level=1, axis=0, inplace=True) # Erase all ttm values as not necessary (trailing twelve months data not necessary)
+        income_statement_df["Date"] = pd.to_datetime(income_statement_df["Date"]) # Updating column type to datetime
+
+        # Clean column types
+        cols=[i for i in income_statement_df.columns if i not in ["Ticker","Date"]]
+        for col in cols:
+            income_statement_df[col] = income_statement_df[col].astype(str).str.replace(',','')
+            income_statement_df[col].replace('-', np.nan, inplace = True) #double check no negative values, find way to replace "-" for null values NaN without replacing negative values but it works?
+            income_statement_df[col]= income_statement_df[col].astype(float)
+
+        # MARKET STATS
+        market_stats_df.rename(columns = {"Unnamed: 0":"Ticker", "Breakdown":"Date"}, inplace = True)
+        market_stats_df.index.set_names(['Ticker Symbol', 'Index'], inplace = True) # Set index names 
+        market_stats_df.drop(0, level=1, axis=0, inplace=True) # Erase all "as of date" rows (1st row for every ticker - unnecessary data)
+        market_stats_df["Date"] = pd.to_datetime(market_stats_df["Date"]) # Updating column type to datetime
+        
+        # Clean column types (all numerical columns except market cap are floats)
+        cols=[i for i in market_stats_df.columns if i not in ["Ticker","Date"]]
+        for col in cols:
+            market_stats_df[col].replace('-', np.nan, inplace = True) #double check no negative values, find way to replace "-" for null values NaN without replacing negative values but it works?
+        
+        # replace "." with "" in only market cap and replace M with 4 zeros, replace B with 7 zeros
+        market_stats_df["Market Cap (intraday)"] = market_stats_df["Market Cap (intraday)"].astype(str).str.replace("B", "0000000")
+        market_stats_df["Market Cap (intraday)"] = market_stats_df["Market Cap (intraday)"].astype(str).str.replace("M", "0000")
+        market_stats_df["Market Cap (intraday)"] = market_stats_df["Market Cap (intraday)"].astype(str).str.replace(".", "")
+        market_stats_df["Market Cap (intraday)"] = market_stats_df["Market Cap (intraday)"].astype(str).astype(int)
+
+        dataframes = {
+            'balance_sheet_df': balance_sheet_df,
+            'cashflow_statement_df': cashflow_statement_df,
+            'income_statement_df': income_statement_df,
+            'market_stats_df': market_stats_df
+        }
+        
+        # Define the cutoff date
+        cutoff_earliest_date = pd.to_datetime('2016-12-31')
+        cutoff_latest_date = pd.to_datetime('2022-04-01')
+        
+        # Iterate over the dictionary items and filter the DataFrames
+        for df_name, df in dataframes.items():
+            mask = (df['Date'] >= cutoff_earliest_date) & (df['Date'] <= cutoff_latest_date)
+            dataframes[df_name] = df[mask]
+        
+        # Access the updated DataFrames
+        balance_sheet_df = dataframes['balance_sheet_df'].reset_index().drop(columns=["Index", "Ticker"])
+        cashflow_statement_df = dataframes['cashflow_statement_df'].reset_index().drop(columns=["Index", "Ticker"])
+        income_statement_df = dataframes['income_statement_df'].reset_index().drop(columns=["Index", "Ticker"])
+        market_stats_df = dataframes['market_stats_df'].reset_index().drop(columns=["Index", "Ticker"])
+        
+        # Saves compiled dataframes as csv files under compiled_CSV
+        os.makedirs('compiled_CSV', exist_ok=True)  
+        balance_sheet_df.to_csv('compiled_CSV/balance_sheet.csv') 
+        cashflow_statement_df.to_csv('compiled_CSV/cashflow_statement.csv') 
+        income_statement_df.to_csv('compiled_CSV/income_statement.csv') 
+        market_stats_df.to_csv('compiled_CSV/market_stats.csv') 
+    @task()
+    def load(dataframes: object):
+        """
+        #### Load task
+        """
+        access_key = os.environ.get("AWS_ACCESS_KEY_ID")
+        secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
+        # TODO: Remove this return
+        # return True
+        def get_file_paths(folder_path):
+            file_paths = []
+            for root, dirs, files in os.walk(folder_path):
+                for file in files:
+                    if file.endswith('.csv'):  # Filter CSV files
+                        file_path = os.path.join(root, file)
+                        file_paths.append(file_path)
+            return file_paths
+
+        def upload_files_to_s3(file_paths, bucket_name):
+            s3 = boto3.client('s3', aws_access_key_id=access_key, aws_secret_access_key=secret_key)
+            for file_path in file_paths:
+                file_name = file_path.split('/')[-1]  # Extract the file name from the path
+                s3.upload_file(file_path, bucket_name, file_name)
+                print(f"Uploaded {file_name} to {bucket_name}")
+
+        # Folder path containing the CSV files
+        folder_path = os.getcwd() + "/compiled_CSV"
+
+        # Call the function to get file paths
+        file_paths = get_file_paths(folder_path)
+
+        # Name of the S3 bucket
+        bucket_name = 'ds4a-c1-team22'
+
+        # Call the function to upload files
+        upload_files_to_s3(file_paths, bucket_name)
+    
+    extract()
+    dataframes = compile()
+    transform(dataframes)
+    load(dataframes)
+etl_taskflow_api()
